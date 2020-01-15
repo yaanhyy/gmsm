@@ -41,10 +41,10 @@ import (
 	"os"
 	"strconv"
 	"time"
-
 	"github.com/tjfoc/gmsm/sm3"
 	"golang.org/x/crypto/ripemd160"
 	"golang.org/x/crypto/sha3"
+	"net/url"
 )
 
 // pkixPublicKey reflects a PKIX public key structure. See SubjectPublicKeyInfo
@@ -53,6 +53,8 @@ type pkixPublicKey struct {
 	Algo      pkix.AlgorithmIdentifier
 	BitString asn1.BitString
 }
+
+
 
 // ParsePKIXPublicKey parses a DER encoded public key. These values are
 // typically found in PEM blocks with "BEGIN PUBLIC KEY".
@@ -857,6 +859,7 @@ type Certificate struct {
 	CRLDistributionPoints []string
 
 	PolicyIdentifiers []asn1.ObjectIdentifier
+	URIs           []*url.URL
 }
 
 // ErrUnsupportedAlgorithm results from attempting to perform an operation that
@@ -1959,7 +1962,7 @@ func CreateCertificate(rand io.Reader, template, parent *Certificate, pub, priv 
 
 	digest := tbsCertContents
 	switch template.SignatureAlgorithm {
-	case SM2WithSM3, SM2WithSHA1, SM2WithSHA256:
+	case UnknownSignatureAlgorithm, SM2WithSM3, SM2WithSHA1, SM2WithSHA256:
 		break
 	default:
 		h := hashFunc.New()
@@ -1977,6 +1980,7 @@ func CreateCertificate(rand io.Reader, template, parent *Certificate, pub, priv 
 	}
 
 	var signature []byte
+
 	signature, err = key.Sign(rand, digest, signerOpts)
 	if err != nil {
 		return
@@ -2105,27 +2109,32 @@ type CertificateRequest struct {
 
 	Subject pkix.Name
 
-	// Attributes is the dried husk of a bug and shouldn't be used.
+	// Attributes contains the CSR attributes that can parse as
+	// pkix.AttributeTypeAndValueSET.
+	//
+	// Deprecated: Use Extensions and ExtraExtensions instead for parsing and
+	// generating the requestedExtensions attribute.
 	Attributes []pkix.AttributeTypeAndValueSET
 
-	// Extensions contains raw X.509 extensions. When parsing CSRs, this
-	// can be used to extract extensions that are not parsed by this
+	// Extensions contains all requested extensions, in raw form. When parsing
+	// CSRs, this can be used to extract extensions that are not parsed by this
 	// package.
 	Extensions []pkix.Extension
 
-	// ExtraExtensions contains extensions to be copied, raw, into any
-	// marshaled CSR. Values override any extensions that would otherwise
-	// be produced based on the other fields but are overridden by any
-	// extensions specified in Attributes.
+	// ExtraExtensions contains extensions to be copied, raw, into any CSR
+	// marshaled by CreateCertificateRequest. Values override any extensions
+	// that would otherwise be produced based on the other fields but are
+	// overridden by any extensions specified in Attributes.
 	//
-	// The ExtraExtensions field is not populated when parsing CSRs, see
-	// Extensions.
+	// The ExtraExtensions field is not populated by ParseCertificateRequest,
+	// see Extensions instead.
 	ExtraExtensions []pkix.Extension
 
 	// Subject Alternate Name values.
 	DNSNames       []string
 	EmailAddresses []string
 	IPAddresses    []net.IP
+	URIs           []*url.URL
 }
 
 // These structures reflect the ASN.1 structure of X.509 certificate
@@ -2353,7 +2362,7 @@ func CreateCertificateRequest(rand io.Reader, template *CertificateRequest, priv
 
 	digest := tbsCSRContents
 	switch template.SignatureAlgorithm {
-	case SM2WithSM3, SM2WithSHA1, SM2WithSHA256:
+	case UnknownSignatureAlgorithm, SM2WithSM3, SM2WithSHA1, SM2WithSHA256:
 		break
 	default:
 		h := hashFunc.New()
@@ -2541,4 +2550,70 @@ func CreateCertificateToPem(FileName string, template, parent *Certificate, pubK
 		return false, err
 	}
 	return true, nil
+}
+
+// SignerAlgo returns an X.509 signature algorithm from a crypto.Signer.
+func SignerAlgo(priv crypto.Signer) SignatureAlgorithm {
+	switch pub := priv.Public().(type) {
+	case *rsa.PublicKey:
+		bitLength := pub.N.BitLen()
+		switch {
+		case bitLength >= 4096:
+			return SHA512WithRSA
+		case bitLength >= 3072:
+			return SHA384WithRSA
+		case bitLength >= 2048:
+			return SHA256WithRSA
+		default:
+			return SHA1WithRSA
+		}
+	case *ecdsa.PublicKey:
+		switch pub.Curve {
+		case elliptic.P521():
+			return ECDSAWithSHA512
+		case elliptic.P384():
+			return ECDSAWithSHA384
+		case elliptic.P256():
+			return ECDSAWithSHA256
+		default:
+			return ECDSAWithSHA1
+		}
+	case *PublicKey:
+		return SM2WithSM3
+	default:
+		return UnknownSignatureAlgorithm
+	}
+}
+
+func DefaultSigAlgo(priv crypto.Signer) SignatureAlgorithm {
+	pub := priv.Public()
+	switch pub := pub.(type) {
+	case *rsa.PublicKey:
+		keySize := pub.N.BitLen()
+		switch {
+		case keySize >= 4096:
+			return SHA512WithRSA
+		case keySize >= 3072:
+			return SHA384WithRSA
+		case keySize >= 2048:
+			return SHA256WithRSA
+		default:
+			return SHA1WithRSA
+		}
+	case *ecdsa.PublicKey:
+		switch pub.Curve {
+		case elliptic.P256():
+			return ECDSAWithSHA256
+		case elliptic.P384():
+			return ECDSAWithSHA384
+		case elliptic.P521():
+			return ECDSAWithSHA512
+		default:
+			return ECDSAWithSHA1
+		}
+	case *PublicKey:
+		return SM2WithSM3
+	default:
+		return UnknownSignatureAlgorithm
+	}
 }
