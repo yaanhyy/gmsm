@@ -45,6 +45,7 @@ import (
 	"golang.org/x/crypto/ripemd160"
 	"golang.org/x/crypto/sha3"
 	"net/url"
+        "github.com/cloudflare/cfssl/log"
 )
 
 // pkixPublicKey reflects a PKIX public key structure. See SubjectPublicKeyInfo
@@ -2422,7 +2423,8 @@ func parseCertificateRequest(in *certificateRequest) (*CertificateRequest, error
 	if err != nil {
 		return nil, err
 	}
-
+	log.Debugf("parseCertificateRequest SignatureAlgorithm: %+v, PublicKeyAlgorithm: %+v", out.SignatureAlgorithm, out.PublicKeyAlgorithm)
+	log.Debugf("parseCertificateRequest PublicKey: %+v, Attributes：%+v", out.PublicKey, out.Attributes)
 	var subject pkix.RDNSequence
 	if rest, err := asn1.Unmarshal(in.TBSCSR.Subject.FullBytes, &subject); err != nil {
 		return nil, err
